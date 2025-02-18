@@ -1,0 +1,30 @@
+[package]
+name = "sol_trader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+yellowstone-grpc-client = "5.0.0"
+yellowstone-grpc-proto = "5.0.0"
+tokio = { version = "1.43.0", features = ["full"] }
+anyhow = "1.0"
+futures = "0.3.31"
+tonic = "0.12.3"
+tonic-health = "0.12.3"
+hex = "0.4"
+solana-sdk = "*"
+log = "0.4"
+spl-token = "*"
+bs58 = "*"
+solana-client = "*"
+solana-transaction-status = "*"
+serde_json="*"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "macros", "bigdecimal", "chrono"] }
+dotenv = "0.15.0"
+ chrono = { version = "0.4", features = ["serde"] }
+ reqwest = "*"
+ serde = "*"
+
+[build-dependencies]
+tonic-build = "*"
+sqlx = "0.8.3"
