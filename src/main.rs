@@ -2,7 +2,7 @@ mod models;
 mod managers;
 mod utils;
 use {
-    anyhow::Result, dotenv::dotenv, managers::{db_manager::{self, DbManager}, grpc_manager::GrpcStreamManager}, solana_client::{rpc_client::RpcClient, rpc_config::RpcTransactionConfig}, solana_sdk::{commitment_config::CommitmentConfig, signature::Signature}, solana_transaction_status::UiTransactionEncoding, std::{collections::HashMap, env, future::IntoFuture, str::FromStr, time::Duration}, tokio::{sync::mpsc, time::sleep}, yellowstone_grpc_proto::{
+    anyhow::Result, dotenv::dotenv, managers::{db_manager::DbManager, grpc_manager::GrpcStreamManager}, solana_client::{rpc_client::RpcClient, rpc_config::RpcTransactionConfig}, solana_sdk::{commitment_config::CommitmentConfig, signature::Signature}, solana_transaction_status::UiTransactionEncoding, std::{collections::HashMap, env, str::FromStr}, tokio::sync::mpsc, yellowstone_grpc_proto::{
         geyser::{
             SubscribeRequest, SubscribeRequestFilterTransactions
         },
@@ -95,42 +95,7 @@ async fn main() -> Result<()> {
             }
         })
     };
-
-
-
-    let pump_fun_listener = {
-        let manager_clone = manager.clone();
-        tokio::spawn(async move {
-            let mut manager_lock = manager_clone.lock().await;
-            if let Err(e) = manager_lock.connect(request).await {
-                eprintln!("Pump.fun listener error: {:?}", e)
-            }
-        })
-    };
-
-
-    //     // Task 2: Database Monitor/Updater.
-    // let db_monitor = tokio::spawn(async move {
-    //     loop {
-    //         // Call a function that polls and updates token info.
-    //         println!("Polling DB for updates...");
-    //         // TODO: implement your DB monitoring/updating logic.
-    //         tokio::time::sleep(Duration::from_secs(60)).await;
-    //     }
-    // });
     
-    //     // Task 3: Transaction Executor.
-    // let tx_executor = tokio::spawn(async move {
-    //     loop {
-    //         // Call a function that evaluates conditions and executes transactions.
-    //         println!("Evaluating and executing transactions if conditions met...");
-    //         // TODO: implement your transaction execution logic.
-    //         tokio::time::sleep(Duration::from_secs(60)).await;
-    //     }
-    // });
-    
-        // Wait on the tasks concurrently.
-    // tokio::join!(pump_fun_listener, db_consumer, token_monitor);
     tokio::join!(token_monitor);
     Ok(())
 }

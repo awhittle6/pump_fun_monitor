@@ -1,5 +1,5 @@
 use {
-    crate::{models::token::TokenInfo, utils::rug_check::{check_solana_rug, RugCheckResult}}, anyhow::Result, sqlx::PgPool, std::sync::Arc
+    crate::{models::token::TokenInfo, utils::rug_check::{check_solana_rug, RugStatus}}, anyhow::Result, sqlx::PgPool, std::sync::Arc
 };
 
 pub struct DbManager {
@@ -48,10 +48,14 @@ impl DbManager {
             match check_solana_rug(&mint_address).await {
                 Ok(result) => {
                     println!("Rug check result: {:?}, mint address: {:?}", result, &mint_address);
-                    if result.confidence > 50.0 {
-                        if let _t = self.delete_token_by_mint(&mint_address){
-                            eprintln!("Error deleting token");
-                        }
+                    match result {
+                        RugStatus::Rug => {
+                            let _t = self.delete_token_by_mint(&mint_address);
+                        }, 
+                        RugStatus::NotRug => {
+                            println!("{:?} has been identified as a buy!", mint_address);
+                        },
+                        _ => {}
                     }
                 },
                 Err(e) => eprintln!("Failed to check solana rug for mint address {}: {:?}", mint_address, e),

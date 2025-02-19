@@ -1,11 +1,11 @@
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey};
-use spl_token::state::{Mint, Account};
+use spl_token::state::Mint;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task;
-use std::{error::Error, str::FromStr, collections::HashMap};
+use std::{collections::HashMap, env, error::Error, str::FromStr};
 
 // API Response Structures
 #[derive(Debug, Deserialize)]
@@ -161,7 +161,6 @@ pub struct LiquidityAnalysis {
     pub burn_status: bool,
 }
 
-const RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
 /// Check liquidity pool status using Raydium protocol analysis
 async fn check_liquidity_pools(client: &RpcClient, mint: &Pubkey) -> Result<LiquidityAnalysis, Box<dyn Error>> {
@@ -188,6 +187,38 @@ async fn check_moralis_api(mint_address: &str) -> Result<MoralisResponse, Box<dy
     Ok(response)
 }
 
+async fn sol_sniffer_call(mint_address: &str) -> Result<SolSnifferResponse, Box<dyn Error + Send + Sync>> {
+    let mint_address_owned = mint_address.to_owned();
+    let api_key = env::var("TOKEN_SNIFFER_KEY").expect("Missing TOKEN_SNIFFER_KEY environment variable");
+    let url = format!("https://solsniffer.com/api/v2/token/{m}", m = mint_address_owned);
+    let result = task::spawn_blocking(move || {
+        let client = Client::new();
+        let response: SolSnifferResponse = client
+        .get(url)
+        .header("X-API-KEY", api_key.to_string())
+        .send()?
+        .json()?;
+        Ok::<_, Box<dyn Error + Send + Sync>>(response)
+    }).await??;
+ Ok(result)   
+}
+
+
+
+pub async fn rugcheck_api(mint_address: &str) -> Result<RugCheckApiResponse, Box<dyn Error + Send + Sync>> {
+    let mint_address_owned = mint_address.to_owned();
+    let url = format!("https://api.rugcheck.xyz/v1/tokens/{n}/report/summary", n = mint_address_owned);
+    let result: RugCheckApiResponse = task::spawn_blocking(move || {
+        let client = Client::new();
+        let response = client
+        .get(url)
+        .header("accept", "application/json")
+        .send()?
+        .json()?;
+    Ok::<_, Box<dyn Error + Send + Sync>>(response)
+    }).await??;
+    Ok(result)
+}
 /// Query GoPlus Security API using the async reqwest client.
 pub async fn check_goplus_api(mint_address: &str) -> Result<GoPlusResponse, Box<dyn Error + Send + Sync>> {
     let mint_address_owned = mint_address.to_owned();
@@ -204,45 +235,55 @@ pub async fn check_goplus_api(mint_address: &str) -> Result<GoPlusResponse, Box<
 }
 
 /// Comprehensive rug check for Solana SPL tokens
-pub async fn check_solana_rug(mint_address: &str) -> Result<RugCheckResult, Box<dyn Error>> {
-    let client = RpcClient::new_with_commitment(RPC_URL, CommitmentConfig::confirmed());
-    let mint_pubkey = Pubkey::from_str(mint_address)?;
+pub async fn check_solana_rug(mint_address: &str) -> Result<RugStatus, Box<dyn Error>> {
+    // let client = RpcClient::new_with_commitment(RPC_URL, CommitmentConfig::confirmed());
+    // let mint_pubkey = Pubkey::from_str(mint_address)?;
     
-    // 1. On-chain metadata analysis
-    let mint_data = client.get_account_data(&mint_pubkey)?;
-    let mint_info = Mint::unpack(&mint_data)?;
-    let metadata = TokenMetadata {
-        mint_authority: mint_info.mint_authority.map(|pk| pk.to_string()).into(),
-        freeze_authority: mint_info.freeze_authority.map(|pk| pk.to_string()).into(),
-        supply: mint_info.supply,
-        decimals: mint_info.decimals,
-        is_initialized: mint_info.is_initialized,
-    };
+    // // 1. On-chain metadata analysis
+    // let mint_data = client.get_account_data(&mint_pubkey)?;
+    // let mint_info = Mint::unpack(&mint_data)?;
+    // let metadata = TokenMetadata {
+    //     mint_authority: mint_info.mint_authority.map(|pk| pk.to_string()).into(),
+    //     freeze_authority: mint_info.freeze_authority.map(|pk| pk.to_string()).into(),
+    //     supply: mint_info.supply,
+    //     decimals: mint_info.decimals,
+    //     is_initialized: mint_info.is_initialized,
+    // };
     
 
-    // 2. Liquidity pool verification
-    let liquidity = check_liquidity_pools(&client, &mint_pubkey).await?;
 
-    // 3. API checks
-    // let moralis_result = check_moralis_api(mint_address).await?;
-    let goplus_result = check_goplus_api(mint_address).await.expect("Error in goplus api request");
-    println!("Mint address: {}", &mint_address);
-    println!("GoPlus result: {:?}", goplus_result);
+    // let liquidity = check_liquidity_pools(&client, &mint_pubkey).await?;
+
+    // let goplus_result = check_goplus_api(mint_address).await.expect("Error in goplus api request");
+
+
+
     // 4. Risk factor aggregation
-    let mut risk_factors = Vec::new();
-    let mut confidence = 0.0;
+    
 
-    // Mint authority checks
-    if metadata.mint_authority.is_some() {
-        risk_factors.push("Mutable mint authority".into());
-        confidence += 25.0;
-    }
 
-    // Freeze authority checks
-    if metadata.freeze_authority.is_some() {
-        risk_factors.push("Mutable freeze authority".into());
-        confidence += 15.0;
+    let rugcheck_result = rugcheck_api(mint_address).await.expect("Error in rug check API");
+    println!("Rug check result: {:?}", rugcheck_result);
+    println!("For mint: {:?}", mint_address);
+    if let Some(num) = rugcheck_result.score {
+        if num > 400 {
+            println!("Rug status failed for {:?}", mint_address);
+            return  Ok(RugStatus::Rug);
+        }
     }
+    // let solsniffer_response = sol_sniffer_call(mint_address).await.expect("Error calling sol sniffer api");
+
+    // // Mint authority checks
+    // if metadata.mint_authority.is_some() {
+    //     risk_factors.push("Mutable mint authority".into());
+    //     confidence += 25.0;
+    // }
+
+    // // Freeze authority checks
+    // if metadata.freeze_authority.is_some() {
+    //     risk_factors.push("Mutable freeze authority".into());
+    //     confidence += 15.0;
+    // }
 
     // Moralis API evaluation
     // if moralis_result.possible_spam {
@@ -250,34 +291,147 @@ pub async fn check_solana_rug(mint_address: &str) -> Result<RugCheckResult, Box<
     //     confidence += 30.0;
     // }
 
-    // GoPlus API evaluation
-    if goplus_result.result.is_empty() {
-        risk_factors.push("No security information found via GoPlus".into());
-        confidence += 10.0;
-    }
+ 
+    // // GoPlus API evaluation
+    // if goplus_result.result.is_empty() {
+    //     risk_factors.push("No security information found via GoPlus".into());
+    //     confidence += 10.0;
+    // }
 
-    // Liquidity checks
-    if !liquidity.pool_locked {
-        risk_factors.push("Unlocked liquidity pool".into());
-        confidence += 35.0;
-    }
+    // // Liquidity checks
+    // if !liquidity.pool_locked {
+    //     risk_factors.push("Unlocked liquidity pool".into());
+    //     confidence += 35.0;
+    // }
 
     // Determine token status based on liquidity and overall confidence.
     // Here we use a minimal liquidity threshold (e.g. 1.0) to decide if there is enough trading data.
-    const MINIMUM_LIQUIDITY: f64 = 5.0;
-    let token_status = if liquidity.liquidity_amount < MINIMUM_LIQUIDITY {
-        RugStatus::InsufficientData
-    } else if confidence >= 50.0 {
-        RugStatus::Rug
-    } else {
-        RugStatus::NotRug
-    };
+    // const MINIMUM_LIQUIDITY: f64 = 5.0;
+    // let token_status = if liquidity.liquidity_amount < MINIMUM_LIQUIDITY {
+    //     RugStatus::InsufficientData
+    // } else if confidence >= 50.0 {
+    //     RugStatus::Rug
+    // } else {
+    //     RugStatus::NotRug
+    // };
 
-    Ok(RugCheckResult {
-        token_status,
-        risk_factors,
-        confidence: if confidence > 100.0 { 100.0 } else { confidence },
-        metadata,
-        liquidity,
-    })
+    Ok(RugStatus::InsufficientData)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SolSnifferResponse {
+    #[serde(rename = "tokenData")]
+    pub token_data: TokenData,
+    #[serde(rename = "tokenInfo")]
+    pub token_info: TokenInfo,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenData {
+    #[serde(rename = "indicatorData")]
+    pub indicator_data: IndicatorData,
+    #[serde(rename = "tokenOverview")]
+    pub token_overview: TokenOverview,
+    pub address: String,
+    #[serde(rename = "deployTime")]
+    pub deploy_time: String,
+    pub externals: String,
+    #[serde(rename = "liquidityList")]
+    pub liquidity_list: Vec<LiquidityEntry>,
+    #[serde(rename = "marketCap")]
+    pub market_cap: f64,
+    #[serde(rename = "ownersList")]
+    pub owners_list: Vec<Owner>,
+    pub score: i32,
+    #[serde(rename = "tokenImg")]
+    pub token_img: String,
+    #[serde(rename = "tokenName")]
+    pub token_name: String,
+    #[serde(rename = "tokenSymbol")]
+    pub token_symbol: String,
+    #[serde(rename = "auditRisk")]
+    pub audit_risk: AuditRisk,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IndicatorData {
+    pub high: IndicatorRating,
+    pub moderate: IndicatorRating,
+    pub low: IndicatorRating,
+    pub specific: IndicatorRating,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IndicatorRating {
+    pub count: i32,
+    pub details: String, // Contains a JSON string with more details.
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenOverview {
+    pub deployer: String,
+    pub mint: String,
+    pub address: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LiquidityEntry {
+    pub pumpfun: PumpfunLiquidity,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PumpfunLiquidity {
+    pub address: String,
+    pub amount: f64,
+    #[serde(rename = "lpPair")]
+    pub lp_pair: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Owner {
+    pub address: String,
+    pub amount: String,
+    pub percentage: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuditRisk {
+    #[serde(rename = "mintDisabled")]
+    pub mint_disabled: bool,
+    #[serde(rename = "freezeDisabled")]
+    pub freeze_disabled: bool,
+    #[serde(rename = "lpBurned")]
+    pub lp_burned: bool,
+    #[serde(rename = "top10Holders")]
+    pub top10_holders: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenInfo {
+    pub price: String,
+    #[serde(rename = "supplyAmount")]
+    pub supply_amount: u64,
+    #[serde(rename = "mktCap")]
+    pub mkt_cap: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RugCheckApiResponse {
+    #[serde(rename = "tokenProgram")]
+    pub token_program: Option<String>,
+    #[serde(rename = "tokenType")]
+    pub token_type: Option<String>,
+    pub risks: Option<Vec<RugRisk>>,
+    pub score: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RugRisk {
+    pub name: String,
+    pub value: String,
+    pub description: String,
+    pub score: u32,
+    pub level: String,
 }

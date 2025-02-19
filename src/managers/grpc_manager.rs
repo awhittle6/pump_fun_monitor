@@ -49,16 +49,6 @@ impl GrpcStreamManager {
                                     if let Err(e) = event_sender.send(TokenInfo { mint_address: pubkey.to_string(), ..Default::default()}).await {
                                         eprintln!("Failed to send token info: {:?}", e);
                                     }
-                                    // match process_new_token_launch(pubkey, rpc).await {
-                                    //     Ok(token_info) => {
-                                    //         if let Err(e) = sender.send(token_info).await {
-                                    //             eprintln!("Failed to send token info: {:?}", e);
-                                    //         }
-                                    //     }
-                                    //     Err(e) => {
-                                    //         eprintln!("Error processing token launch: {:?}", e);
-                                    //     }
-                                    // }
                                 });
                                 println!("  Pump.fun token: {}\n", pubkey.to_string());
                             }
