@@ -161,31 +161,69 @@ pub struct LiquidityAnalysis {
     pub burn_status: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ShyftLiquidityResponse {
+    pub success: Option<bool>,
+    pub message: Option<String>,
+    pub result: Option<LiquidityResult>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LiquidityResult {
+    pub address: Option<String>,
+    pub dex: Option<String>,
+    #[serde(rename = "programId")]
+    pub program_id: Option<String>,
+    pub liquidity: Option<Liquidity>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Liquidity {
+    pub tokenA: Option<TokenLiquidity>,
+    pub tokenB: Option<TokenLiquidity>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenLiquidity {
+    pub address: Option<String>,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+    pub imageUri: Option<String>,
+    pub amount: Option<u64>,
+}
 
 /// Check liquidity pool status using Raydium protocol analysis
-async fn check_liquidity_pools(client: &RpcClient, mint: &Pubkey) -> Result<LiquidityAnalysis, Box<dyn Error>> {
+pub async fn check_liquidity_pools(mint: &str) -> Result<ShyftLiquidityResponse, Box<dyn Error + Send + Sync>> {
     // Implementation would use get_account_data and parse Raydium pool state
     // Placeholder implementation:
-    Ok(LiquidityAnalysis {
-        pool_locked: false,
-        liquidity_amount: 0.0,
-        creator_holdings: 0.0,
-        burn_status: false,
-    })
-}
-
-/// Query Moralis API for spam detection
-async fn check_moralis_api(mint_address: &str) -> Result<MoralisResponse, Box<dyn Error>> {
-    let client = Client::new();
-    let response = client
-        .get("https://deep-index.moralis.io/api/v2/spl/token/metadata")
-        .query(&[("chain", "sol"), ("addresses", mint_address)])
-        .header("X-API-Key", "")
+    let mint_owned = mint.to_owned();
+    let api_key = env::var("SHYFT_API_KEY").expect("Missing SHYFT API Key for LP analysis");
+    let result = task::spawn_blocking(move || {
+        let client = Client::new();
+        let response : ShyftLiquidityResponse = client
+        .get("https://defi.shyft.to/v0/pools/get_liquidity_details")
+        .query(&[("address", &mint_owned)])
+        .header("x-api-key", api_key)
         .send()?
         .json()?;
-    
-    Ok(response)
+        Ok::<_, Box<dyn Error + Send + Sync>>(response)
+    }).await??;
+    Ok(result)
 }
+
+// /// Query Moralis API for spam detection
+// async fn check_moralis_api(mint_address: &str) -> Result<MoralisResponse, Box<dyn Error>> {
+//     let client = Client::new();
+//     let response = client
+//         .get("https://deep-index.moralis.io/api/v2/spl/token/metadata")
+//         .query(&[("chain", "sol"), ("addresses", mint_address)])
+//         .header("X-API-Key", "")
+//         .send()?
+//         .json()?;
+    
+//     Ok(response)
+// }
 
 async fn sol_sniffer_call(mint_address: &str) -> Result<SolSnifferResponse, Box<dyn Error + Send + Sync>> {
     let mint_address_owned = mint_address.to_owned();
@@ -259,12 +297,15 @@ pub async fn check_solana_rug(mint_address: &str) -> Result<RugStatus, Box<dyn E
 
 
     // 4. Risk factor aggregation
+    let liqudity_response: ShyftLiquidityResponse = check_liquidity_pools(mint_address).await.expect("msg");
+    println!("Token: {mint_address:?}");
+    println!("Liquidity response: {liqudity_response:?}");
+    if let Some(_) = liqudity_response.result {
+    } else {
+        return  Ok(RugStatus::Rug);
+    }
     
-
-
     let rugcheck_result = rugcheck_api(mint_address).await.expect("Error in rug check API");
-    println!("Rug check result: {:?}", rugcheck_result);
-    println!("For mint: {:?}", mint_address);
     if let Some(num) = rugcheck_result.score {
         if num > 400 {
             println!("Rug status failed for {:?}", mint_address);

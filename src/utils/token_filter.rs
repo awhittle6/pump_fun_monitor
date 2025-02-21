@@ -1,8 +1,9 @@
 use {
-    anyhow::Result, solana_client::nonblocking::rpc_client::RpcClient, solana_sdk::pubkey::Pubkey, spl_token::instruction::TokenInstruction, sqlx::PgPool, std::sync::Arc, yellowstone_grpc_proto::
+    anyhow::Result, solana_client::nonblocking::rpc_client::RpcClient, solana_sdk::pubkey::Pubkey, spl_token::instruction::TokenInstruction, std::sync::Arc, yellowstone_grpc_proto::
         prelude::Message
     ,
 };
+
 
 
 pub async fn process_new_token_launch(_token_mint: Pubkey, _rpc_client: Arc<RpcClient>) -> Result<()> {

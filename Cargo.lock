@@ -3843,6 +3843,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bs58",
+ "bytemuck",
  "chrono",
  "dotenv",
  "futures",

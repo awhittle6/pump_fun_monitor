@@ -2,7 +2,7 @@ mod models;
 mod managers;
 mod utils;
 use {
-    anyhow::Result, dotenv::dotenv, managers::{db_manager::DbManager, grpc_manager::GrpcStreamManager}, solana_client::{rpc_client::RpcClient, rpc_config::RpcTransactionConfig}, solana_sdk::{commitment_config::CommitmentConfig, signature::Signature}, solana_transaction_status::UiTransactionEncoding, std::{collections::HashMap, env, str::FromStr}, tokio::sync::mpsc, yellowstone_grpc_proto::{
+    anyhow::Result, dotenv::dotenv, managers::{db_manager::DbManager, grpc_manager::GrpcStreamManager, swqos_manager::SwqosRpcClient}, models::token, solana_client::{rpc_client::RpcClient, rpc_config::RpcTransactionConfig}, solana_sdk::{commitment_config::CommitmentConfig, pubkey::{self, Pubkey}, signature::Signature}, solana_transaction_status::UiTransactionEncoding, std::{collections::HashMap, env, str::FromStr, sync::Arc, thread::sleep, time::Duration}, tokio::sync::mpsc, yellowstone_grpc_proto::{
         geyser::{
             SubscribeRequest, SubscribeRequestFilterTransactions
         },
@@ -42,6 +42,8 @@ async fn main() -> Result<()> {
     dotenv().ok();
     let grpc_endpoint = env::var("GRPC_ENDPOINT").expect("Missing GRPC Endpoint variable");
     let database_uri = env::var("DATABASE_URL").expect("Missing DB_URL environment variable");
+    let rpc_endpoint = env::var("RPC_ENDPOINT").expect("Missing RPC_ENDPOINT");
+    let rpc_manager = Arc::new(SwqosRpcClient::new(&rpc_endpoint));
     let db_manager = DbManager::new(&database_uri).await?;
     let (tx, mut rx) = mpsc::channel::<models::token::TokenInfo>(100);
     let manager = GrpcStreamManager::new(
@@ -67,35 +69,56 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    println!("Starting subscription for Pump.fun launches");
+   
 
 
-    let token_monitor = {
-        let db_manager = db_manager.clone();
-        tokio::spawn(async move {
-            loop {
-                if let Err(e) = db_manager.process_all_tokens().await {
-                    println!("Error processing all tokens: {:?}", e);
-                }
-                // sleep(Duration::from_secs(4)).await;
-                
-            }
-        })
-    };
+    // let token_monitor = {
+    //     let db_manager_clone = db_manager.clone();
+    //     tokio::spawn(async move {
+    //         println!("Monitoring the database for tokens");
+    //         loop {
+    //             if let Err(_) = db_manager_clone.process_all_tokens().await {
+    //                 println!("Error processing tokens");
+    //             }
+    //             sleep(Duration::from_secs(5));
+    //         }
+    //     })
+    // };
 
     let db_consumer = {
         let db_manager = db_manager.clone();
+        let rpc_manager_clone = rpc_manager.clone();
         tokio::spawn(async move {
             while let Some(token_info) = rx.recv().await {
-                if let Err(e) = db_manager.store_token_info(&token_info).await{
-                    eprintln!("Error storing token info: {:?}", e);
-                } else {
-                    println!("DB stored token info for mint: {:?}", token_info);
+                let pubkey = Pubkey::from_str(&token_info.mint_address).unwrap();
+                sleep(Duration::from_secs(20));
+                match rpc_manager_clone.validate_token(&pubkey).await {
+                    Ok(v) => {
+                        if v {
+                            println!("Buy identified: {:?}", &pubkey.to_string());
+                        }
+                    },
+                    Err(e) => {
+                        // eprintln!("Error validating token: {e:?}")
+                    }
                 }
             }
         })
     };
+
+
+
+    let pump_fun_listener = {
+        let manager_clone = manager.clone();
+        tokio::spawn(async move {
+            let mut manager_lock = manager_clone.lock().await;
+            if let Err(e) = manager_lock.connect(request).await {
+                eprintln!("Pump.fun listener error: {:?}", e)
+            }
+        })
+    };
+
     
-    tokio::join!(token_monitor);
+    tokio::join!(db_consumer, pump_fun_listener);
     Ok(())
 }

@@ -1,5 +1,5 @@
 use {
-    crate::{models::token::TokenInfo, utils::rug_check::{check_solana_rug, RugStatus}}, anyhow::Result, sqlx::PgPool, std::sync::Arc
+    super::swqos_manager::SwqosRpcClient, crate::models::token::{TokenInfo, TokenMetrics}, anyhow::{Ok, Result}, futures::TryFutureExt, solana_sdk::pubkey::Pubkey, sqlx::PgPool, std::{env, result::Result::Err, str::FromStr, sync::Arc}
 };
 
 pub struct DbManager {
@@ -17,49 +17,54 @@ impl DbManager {
 
     /// Deletes a token from the tokens table based on its mint address.
     /// Instead of returning an error, any issues are logged.
-    pub async fn delete_token_by_mint(&self, mint_address: &str) {
-        match sqlx::query!(
-            r#"
-            DELETE FROM tokens
-            WHERE mint_address = $1
-            "#,
-            mint_address
-        )
-        .execute(&*self.db_pool)
-        .await {
-            Ok(_) => println!("Successfully deleted token with mint address: {}", mint_address),
-            Err(e) => eprintln!(
-                "Failed to delete token with mint address {}: {:?}",
-                mint_address, e
-            ),
-        }
-    }
+    /// 
+    /// 
+    /// 
+    // pub async fn delete_token_by_mint(&self, mint_address: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
+    //     sqlx::query!(
+    //         r#"
+    //         DELETE FROM tokens
+    //         WHERE mint_address = $1
+    //         "#,
+    //         mint_address
+    //     )
+    //     .execute(&*self.db_pool)
+    //     .await?;
+    //     Ok(())
+    // }
 
-    pub async fn process_all_tokens(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn process_all_tokens(&self) -> anyhow::Result<()> {
         let tokens = sqlx::query_as!(
             MintAddress,
             r#"SELECT mint_address FROM tokens"#
         )
         .fetch_all(&*self.db_pool)
         .await?;
-
+        if tokens.len() < 1 {
+            return  Ok(());
+        }
+        let rpc_endpoint = env::var("RPC_ENDPOINT").expect("Missing RPC endpoint");
+        let rpc_manager = SwqosRpcClient::new(&rpc_endpoint);
         for mint in tokens {
             let mint_address = mint.mint_address.clone();
-            match check_solana_rug(&mint_address).await {
-                Ok(result) => {
-                    println!("Rug check result: {:?}, mint address: {:?}", result, &mint_address);
-                    match result {
-                        RugStatus::Rug => {
-                            let _t = self.delete_token_by_mint(&mint_address);
-                        }, 
-                        RugStatus::NotRug => {
-                            println!("{:?} has been identified as a buy!", mint_address);
-                        },
-                        _ => {}
+            // let  rug_status = check_solana_rug(&mint_address).await.expect("msg");
+            let pubkey = Pubkey::from_str(&mint_address).unwrap();
+            match rpc_manager.validate_token(&pubkey).await {
+                std::result::Result::Ok(is_valid) => {
+                    if !is_valid {
+                        println!("🚨Deleting token : {mint_address:?} from table");
+                        sqlx::query!(
+                            r#"
+                            DELETE FROM tokens
+                            WHERE mint_address = $1
+                            "#,
+                            mint_address
+                        )
+                        .execute(&*self.db_pool).await?;
                     }
                 },
-                Err(e) => eprintln!("Failed to check solana rug for mint address {}: {:?}", mint_address, e),
-            }
+                Err(_) => {}
+            };
         }
         Ok(())
     }
@@ -67,58 +72,84 @@ impl DbManager {
 
     
     pub async fn store_token_info(&self, token_info: &TokenInfo) -> Result<()> {
-
-        sqlx::query_as!(P,
+        sqlx::query!(
             r#"
             INSERT INTO tokens (
                 mint_address,
-                token_symbol,
-                launch_timestamp,
-                supply,
-                decimals,
-                market_cap,
-                rug_check_status,
-                rug_check_confidence_score,
+                creator_address,
                 created_at,
-                updated_at
+                symbol,
+                bonding_address
             )
             VALUES (
                 $1, 
                 $2, 
                 $3, 
                 $4, 
-                $5, 
-                $6, 
-                $7, 
-                $8, 
-                COALESCE($9, NOW()), 
-                NOW()
+                $5
             )
             ON CONFLICT (mint_address) DO UPDATE SET
-                token_symbol = EXCLUDED.token_symbol,
-                launch_timestamp = EXCLUDED.launch_timestamp,
-                supply = EXCLUDED.supply,
-                decimals = EXCLUDED.decimals,
-                market_cap = EXCLUDED.market_cap,
-                rug_check_status = EXCLUDED.rug_check_status,
-                rug_check_confidence_score = EXCLUDED.rug_check_confidence_score,
-                updated_at = NOW()
+                creator_address = EXCLUDED.creator_address,
+                symbol = EXCLUDED.symbol,
+                bonding_address = EXCLUDED.bonding_address
             "#,
             token_info.mint_address,
-            token_info.token_symbol,
-            token_info.launch_timestamp,
-            token_info.supply,
-            token_info.decimals,
-            token_info.market_cap,
-            token_info.rug_check_status,
-            token_info.rug_check_confidence_score,
+            token_info.creator_address,
             token_info.created_at,
+            token_info.symbol,
+            token_info.bonding_address,
         )
         .execute(&*self.db_pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to store token info: {:?}", e))?;
         Ok(())
         
+    }
+
+
+    pub async fn store_token_metrics(&self, token_metric: &TokenMetrics) -> Result<()> {
+        let token = sqlx::query!(
+            r#"
+            SELECT id FROM tokens
+            WHERE mint_address = $1
+            "#,
+            token_metric.mint_address
+        )
+        .fetch_one(&*self.db_pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch token: {:?}", e))?;
+
+        sqlx::query!(
+            r#"
+            INSERT INTO token_metrics (
+                token_id,
+                bonding_percent,
+                ilv,
+                social_replies,
+                safety_score,
+                liquidity,
+                holders,
+                volume,
+                buy_volume,
+                sell_volume
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+            token.id,
+            token_metric.bonding_percent,
+            token_metric.ilv,
+            token_metric.social_replies,
+            token_metric.safety_score,
+            token_metric.liquidity,
+            token_metric.holders,
+            token_metric.volume,
+            token_metric.buy_volume,
+            token_metric.sell_volume
+        )
+        .execute(&*self.db_pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to store token metrics: {:?}", e))?;
+        Ok(())
     }
     
     pub async fn new(db_uri: &str) -> Result<Arc<DbManager>> {
